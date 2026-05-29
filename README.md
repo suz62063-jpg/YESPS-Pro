@@ -1,5 +1,3 @@
-:::writing{variant=“document” id=“47295”}
-
 YESPS Pro
 
 YESPS Pro 是一个全球地震可视化模拟终端。
@@ -36,3 +34,4 @@ License
 
 Apache License 2.0
 :::
+谢谢您的支持    米柚致    2026.5.30
