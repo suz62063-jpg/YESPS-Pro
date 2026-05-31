@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>YESPS Pro v2.0 — 全球地震监测与科研仿真平台</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <style>
+        :root {
+            --primary: #00f0ff; --danger: #ff2a3a; --bg: #010203;
+            --surface: rgba(18, 20, 28, 0.9); --glass: rgba(255, 255, 255, 0.05);
+            --safe-top: env(safe-area-inset-top); --safe-bottom: env(safe-area-inset-bottom);
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+        body { font-family: -apple-system, system-ui, sans-serif; background: var(--bg); color: #fff; height: 100dvh; overflow: hidden; }
+        
+        #map-container { position: absolute; inset: 0; z-index: 1; }
+
+        /* --- UI 架构层 --- */
+        .hud { position: absolute; inset: 0; z-index: 100; pointer-events: none; display: flex; flex-direction: column; padding: calc(var(--safe-top) + 15px) 20px calc(var(--safe-bottom) + 15px); }
+        .hud > * { pointer-events: auto; }
+
+        .glass-panel { background: var(--surface); backdrop-filter: blur(25px); border: 1px solid rgba(255,255,255,0.1); border-radius: 16px; box-shadow: 0 10px 40px rgba(0,0,0,0.6); }
+
+        /* 顶部导航与搜索 */
+        .top-nav { display: flex; justify-content: space-between; align-items: center; padding: 12px 20px; gap: 15px; }
+        .brand { font-size: 18px; font-weight: 900; letter-spacing: 1px; }
+        .filter-group { display: flex; gap: 8px; }
+        select, input { background: var(--glass); border: 1px solid rgba(255,255,255,0.1); color: #fff; padding: 6px 12px; border-radius: 8px; font-size: 12px; outline: none; }
+
+        /* 侧边数据列表 - 虚拟化布局思维 */
+        .side-panel { width: 340px; margin-top: 15px; display: flex; flex-direction: column; max-height: 70%; overflow: hidden; transition: transform 0.4s; }
+        .side-panel.hidden { transform: translateX(-360px); }
+        .list-header { padding: 15px; font-size: 11px; color: rgba(255,255,255,0.4); border-bottom: 1px solid rgba(255,255,255,0.05); display: flex; justify-content: space-between; }
+        #eq-list { flex: 1; overflow-y: auto; padding: 10px; scrollbar-width: none; }
+        #eq-list::-webkit-scrollbar { display: none; }
+
+        .eq-card { padding: 14px; border-radius: 12px; margin-bottom: 10px; background: rgba(255,255,255,0.02); cursor: pointer; transition: 0.2s; border: 1px solid transparent; }
+        .eq-card:hover { background: rgba(255,255,255,0.06); }
+        .eq-card.active { border-color: var(--primary); background: rgba(0, 240, 255, 0.1); }
+        .eq-card .mag { font-size: 20px; font-weight: 800; color: var(--primary); float: left; margin-right: 15px; }
+        .eq-card .mag.mega { color: var(--danger); text-shadow: 0 0 10px var(--danger); }
+        .eq-card h4 { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .eq-card p { font-size: 11px; opacity: 0.5; margin-top: 4px; font-family: monospace; }
+
+        /* 仿真控制台 - 底部居中 */
+        .console { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); display: none; gap: 20px; align-items: center; padding: 12px 25px; }
+        .console.active { display: flex; }
+        .ctrl-btn { width: 40px; height: 40px; border-radius: 50%; border: none; background: #fff; color: #000; cursor: pointer; display: grid; place-items: center; font-weight: bold; }
+        .ctrl-btn.stop { background: var(--danger); color: #fff; }
+
+        /* 仪表盘 */
+        .dashboard { position: absolute; top: 15px; right: 20px; width: 260px; display: none; flex-direction: column; gap: 10px; }
+        .dashboard.active { display: flex; }
+        .stat-box { padding: 15px; }
+        .stat-label { font-size: 10px; color: rgba(255,255,255,0.4); text-transform: uppercase; margin-bottom: 4px; }
+        .stat-val { font-size: 28px; font-weight: 200; font-family: monospace; }
+        .stat-unit { font-size: 12px; opacity: 0.5; margin-left: 5px; }
+
+        /* 提醒组件 Toast */
+        #toast { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); z-index: 1000; padding: 10px 20px; border-radius: 8px; font-size: 13px; display: none; }
+        .toast-err { background: var(--danger); color: #fff; }
+
+        @media (max-width: 768px) {
+            .side-panel { position: absolute; bottom: 0; left: 0; right: 0; width: 100%; height: 40%; transform: translateY(0); }
+            .side-panel.hidden { transform: translateY(100%); }
+            .dashboard { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+
+<div id="map-container"></div>
+
+<div class="hud">
+    <div class="top-nav glass-panel">
+        <div class="brand">YESPS<span>PRO 2.0</span></div>
+        <div class="filter-group">
+            <select id="filter-mag" onchange="App.data.refresh()">
+                <option value="4.5">M 4.5+</option>
+                <option value="6.0">M 6.0+</option>
+                <option value="7.5">M 7.5+</option>
+            </select>
+            <input type="text" id="search-input" placeholder="搜索区域..." oninput="App.data.refresh()">
+        </div>
+    </div>
+
+    <div id="side-panel" class="side-panel glass-panel">
+        <div class="list-header">全球地震目录 <span id="count-label">-- 条记录</span></div>
+        <div id="eq-list"></div>
+    </div>
+
+    <div id="dashboard" class="dashboard glass-panel">
+        <div class="stat-box">
+            <div class="stat-label">Elapsed / 仿真时长</div>
+            <div class="stat-val" id="v-time">0.0<span class="stat-unit">s</span></div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-label">S-Wave Dist / 横波半径</div>
+            <div class="stat-val" id="v-dist" style="color:var(--danger)">0<span class="stat-unit">km</span></div>
+        </div>
+        <div class="stat-box">
+            <div class="stat-label">Intensity / 预测烈度</div>
+            <div class="stat-val" id="v-mmi">I</div>
+            <div style="height:4px; background:rgba(255,255,255,0.1); margin-top:10px; border-radius:2px; overflow:hidden;">
+                <div id="v-bar" style="height:100%; width:0%; background:var(--danger); transition:0.3s"></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="console" class="console glass-panel">
+        <div style="font-size: 12px; max-width: 150px; font-weight: bold;" id="v-place">--</div>
+        <button class="ctrl-btn" id="btn-play" onclick="App.engine.toggle()">PAUSE</button>
+        <button class="ctrl-btn stop" onclick="App.engine.stop()">EXIT</button>
+    </div>
+</div>
+
+<div id="toast" class="toast-err"></div>
+
+<script>
+/**
+ * 1. SeismicPhysicsCore: 标准地震物理模型
+ */
+class SeismicPhysicsCore {
+    // 走时模型：基于IASPEI标准的平均地壳模型
+    static getConstants(depth) {
+        // 考虑地壳深度影响的平均波速模型
+        const vp = 5.8 + (depth * 0.02); 
+        return {
+            vp: vp,
+            vs: vp / 1.732, // 泊松比假设
+            k: 0.005 // 介质Q值修正
+        };
+    }
+
+    // Atkinson-Boore 烈度预测方程 (IPE)
+    static calculateIntensity(M, R, H) {
+        const hypoDist = Math.sqrt(R * R + H * H);
+        if (hypoDist < 1) return 1.5 * M;
+        // 修正后的衰减公式: I = 1.0 + 1.5M - 2.56 * ln(Rh)
+        let intensity = 1.0 + 1.5 * M - 2.5 * Math.log(hypoDist) - 0.001 * hypoDist;
+        return Math.max(1, Math.min(12, intensity));
+    }
+}
+
+/**
+ * 2. DataManager: 稳健的数据流水线
+ */
+class DataManager {
+    constructor() {
+        this.raw = [];
+        this.historical = [
+            { id:'h1', mag:9.5, place:"1960 智利瓦尔迪维亚大地震", lat:-38.14, lon:-73.03, dep:33, time:"1960-05-22" },
+            { id:'h2', mag:9.1, place:"2011 日本东北 3.11 大地震", lat:38.32, lon:142.36, dep:24, time:"2011-03-11" },
+            { id:'h3', mag:8.0, place:"2008 中国汶川大地震", lat:31.02, lon:103.36, dep:19, time:"2008-05-12" }
+        ];
+    }
+
+    async fetch() {
+        try {
+            const res = await fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_week.geojson');
+            if (!res.ok) throw new Error("API_ERROR");
+            const data = await res.json();
+            this.raw = data.features.map(f => ({
+                id: f.id,
+                mag: f.properties.mag || 0,
+                place: f.properties.place || "Unknown Location",
+                lat: f.geometry.coordinates[1],
+                lon: f.geometry.coordinates[0],
+                dep: f.geometry.coordinates[2] || 10,
+                time: new Date(f.properties.time).toLocaleDateString()
+            }));
+            this.refresh();
+        } catch (e) {
+            App.ui.showToast("实时数据同步失败，切换为本地巨灾库");
+            this.raw = [];
+            this.refresh();
+        }
+    }
+
+    refresh() {
+        const magLimit = parseFloat(document.getElementById('filter-mag').value);
+        const search = document.getElementById('search-input').value.toLowerCase();
+        
+        const filtered = [...this.historical, ...this.raw].filter(d => 
+            d.mag >= magLimit && d.place.toLowerCase().includes(search)
+        ).sort((a,b) => b.mag - a.mag);
+
+        App.ui.renderList(filtered);
+    }
+}
+
+/**
+ * 3. SimulationEngine: 具备生命周期管控的引擎
+ */
+class SimulationEngine {
+    constructor() {
+        this.active = false;
+        this.paused = false;
+        this.simId = null;
+        this.data = null;
+        this.startTime = 0;
+        this.pauseOffset = 0;
+        this.speed = 50; // 50x 加速
+    }
+
+    start(ev) {
+        this.stop(); // 强制销毁上一进程
+        this.data = ev;
+        this.physics = SeismicPhysicsCore.getConstants(ev.dep);
+        this.active = true;
+        this.paused = false;
+        this.startTime = performance.now();
+        this.pauseOffset = 0;
+        
+        App.ui.setSimState(true, ev.place);
+        App.map.flyTo(ev.lat, ev.lon);
+        this.tick();
+    }
+
+    tick() {
+        if (!this.active || this.paused) return;
+
+        const now = performance.now();
+        const elapsed = (now - this.startTime + this.pauseOffset) / 1000 * this.speed;
+        
+        const sDelay = this.data.dep / this.physics.vs;
+        const pRad = elapsed * this.physics.vp;
+        const sRad = Math.max(0, (elapsed - sDelay) * this.physics.vs);
+        
+        const mmi = SeismicPhysicsCore.calculateIntensity(this.data.mag, sRad, this.data.dep);
+
+        // 步进渲染
+        App.map.updateWaves(this.data.lat, this.data.lon, pRad, sRad);
+        App.ui.updateDashboard(elapsed, sRad, mmi);
+
+        // 自销毁逻辑：当能量衰减到极低时
+        if (mmi < 1.05 && sRad > 500) {
+            this.stop();
+            return;
+        }
+
+        this.simId = requestAnimationFrame(() => this.tick());
+    }
+
+    toggle() {
+        if (!this.active) return;
+        this.paused = !this.paused;
+        if (!this.paused) {
+            this.startTime = performance.now();
+            this.tick();
+        } else {
+            this.pauseOffset += (performance.now() - this.startTime);
+            cancelAnimationFrame(this.simId);
+        }
+        document.getElementById('btn-play').innerText = this.paused ? "RESUME" : "PAUSE";
+    }
+
+    stop() {
+        this.active = false;
+        cancelAnimationFrame(this.simId);
+        App.map.clear();
+        App.ui.setSimState(false);
+    }
+}
+
+/**
+ * 4. UI & Map Controllers (核心解耦)
+ */
+const App = {
+    data: new DataManager(),
+    engine: new SimulationEngine(),
+    
+    map: {
+        instance: null, layers: {},
+        init() {
+            this.instance = L.map('map-container', { center:[20,0], zoom:3, zoomControl:false, attributionControl:false });
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(this.instance);
+            this.layers.p = L.circle([0,0], {radius:0, color:'#00f0ff', weight:1, fill:false, dashArray:'5,5', interactive:false}).addTo(this.instance);
+            this.layers.s = L.circle([0,0], {radius:0, color:'#ff2a3a', weight:2, fillColor:'#ff2a3a', fillOpacity:0.1, interactive:false}).addTo(this.instance);
+            this.layers.epi = L.circleMarker([0,0], {radius:8, color:'#fff', weight:2, fillColor:'#ff2a3a', fillOpacity:1}).addTo(this.instance);
+        },
+        flyTo(lat, lon) { this.instance.flyTo([lat, lon], 5); },
+        updateWaves(lat, lon, pr, sr) {
+            this.layers.epi.setLatLng([lat, lon]);
+            this.layers.p.setLatLng([lat, lon]).setRadius(pr * 1000);
+            this.layers.s.setLatLng([lat, lon]).setRadius(sr * 1000);
+        },
+        clear() { 
+            this.layers.p.setRadius(0); this.layers.s.setRadius(0); 
+            this.layers.epi.setLatLng([0,0]);
+        }
+    },
+
+    ui: {
+        renderList(list) {
+            const container = document.getElementById('eq-list');
+            const frag = document.createDocumentFragment();
+            document.getElementById('count-label').innerText = `${list.length} 条记录`;
+            
+            list.forEach(ev => {
+                const el = document.createElement('div');
+                el.className = 'eq-card';
+                el.innerHTML = `
+                    <div class="mag ${ev.mag >= 8 ? 'mega' : ''}">${ev.mag.toFixed(1)}</div>
+                    <h4>${ev.place}</h4>
+                    <p>DATE: ${ev.time} | DEPTH: ${ev.dep}KM</p>`;
+                el.onclick = () => App.engine.start(ev);
+                frag.appendChild(el);
+            });
+            container.innerHTML = '';
+            container.appendChild(frag);
+        },
+        updateDashboard(t, s, mmi) {
+            document.getElementById('v-time').innerHTML = `${t.toFixed(1)}<span class="stat-unit">s</span>`;
+            document.getElementById('v-dist').innerHTML = `${Math.floor(s)}<span class="stat-unit">km</span>`;
+            document.getElementById('v-mmi').innerText = ["I","II","III","IV","V","VI","VII","VIII","IX","X","XI","XII"][Math.floor(mmi)-1] || "I";
+            document.getElementById('v-bar').style.width = `${(mmi/12)*100}%`;
+        },
+        setSimState(active, place = "") {
+            document.getElementById('side-panel').classList.toggle('hidden', active);
+            document.getElementById('dashboard').classList.toggle('active', active);
+            document.getElementById('console').classList.toggle('active', active);
+            document.getElementById('v-place').innerText = place;
+        },
+        showToast(msg) {
+            const t = document.getElementById('toast');
+            t.innerText = msg; t.style.display = 'block';
+            setTimeout(() => t.style.display = 'none', 3000);
+        }
+    }
+};
+
+// 初始化系统
+window.onload = () => {
+    App.map.init();
+    App.data.fetch();
+};
+</script>
+</body>
+</html>
