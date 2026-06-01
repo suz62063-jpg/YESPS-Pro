@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>YESPS Pro</title>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <style>
+        /* ================= 1. Apple 设计系统规范 ================= */
+        :root {
+            --bg: #000000;
+            --surface: rgba(28, 28, 30, 0.85);
+            --card: #1C1C1E;
+            --text-main: #FFFFFF;
+            --text-muted: #8E8E93;
+            --apple-blue: #0A84FF;
+            --apple-red: #FF453A;
+            --apple-orange: #FF9F0A;
+            --bd: rgba(255, 255, 255, 0.1);
+            --blur: blur(30px) saturate(180%);
+            --safe-top: env(safe-area-inset-top, 20px);
+            --safe-bottom: env(safe-area-inset-bottom, 20px);
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; outline: none; -webkit-tap-highlight-color: transparent; }
+        body { font-family: -apple-system, "SF Pro Display", "PingFang SC", system-ui; background: var(--bg); color: var(--text-main); height: 100dvh; overflow: hidden; -webkit-font-smoothing: antialiased; }
+        .mono { font-family: "SF Mono", ui-monospace, monospace; font-variant-numeric: tabular-nums; }
+
+        #map { position: absolute; inset: 0; z-index: 1; background: var(--bg); }
+        .leaflet-container { background: var(--bg) !important; }
+
+        /* ================= 2. 布局架构 (Layout) ================= */
+        .ui-root { position: relative; z-index: 100; pointer-events: none; width: 100%; height: 100%; display: flex; }
+
+        /* 侧边栏及移动端抽屉适配 */
+        .sidebar {
+            position: absolute; top: var(--safe-top); left: 20px; bottom: var(--safe-bottom);
+            width: 360px; z-index: 110; display: flex; flex-direction: column;
+            background: var(--surface); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+            border: 0.5px solid var(--bd); border-radius: 24px; pointer-events: auto;
+            transition: transform 0.6s cubic-bezier(0.16, 1, 0.3, 1), opacity 0.5s;
+        }
+        .sidebar.hidden { transform: translateX(-120%); opacity: 0; }
+
+        .header { padding: 32px 24px 12px; }
+        .header h1 { font-size: 28px; font-weight: 800; letter-spacing: -1px; }
+        .header p { font-size: 11px; color: var(--apple-blue); font-weight: 700; text-transform: uppercase; letter-spacing: 1px; margin-top: 2px; }
+
+        .search-area { padding: 12px 24px 20px; display: flex; flex-direction: column; gap: 12px; border-bottom: 0.5px solid var(--bd); }
+        .input-pill { background: rgba(120, 120, 128, 0.2); border: none; color: #fff; padding: 12px 16px; border-radius: 12px; font-size: 15px; width: 100%; transition: background 0.2s; }
+        .input-pill:focus { background: rgba(120, 120, 128, 0.3); }
+        
+        .seg-ctrl { display: flex; background: rgba(120, 120, 128, 0.15); padding: 2px; border-radius: 10px; }
+        .seg-item { flex: 1; text-align: center; padding: 7px 0; font-size: 13px; font-weight: 600; cursor: pointer; border-radius: 8px; color: var(--text-muted); }
+        .seg-item.active { background: #3A3A3C; color: #fff; }
+
+        .list-wrap { flex: 1; overflow-y: auto; padding: 12px 16px; scrollbar-width: none; }
+        .list-wrap::-webkit-scrollbar { display: none; }
+        
+        .card {
+            padding: 16px; border-radius: 18px; margin-bottom: 8px; cursor: pointer;
+            background: transparent; border: 0.5px solid transparent; transition: 0.2s;
+            display: flex; align-items: center; gap: 16px;
+        }
+        .card:hover { background: rgba(255, 255, 255, 0.05); }
+        .card.active { background: var(--card); border-color: var(--bd); box-shadow: 0 4px 20px rgba(0,0,0,0.4); }
+        .mag-tag { font-size: 24px; font-weight: 800; width: 50px; text-align: center; letter-spacing: -1px; }
+
+        /* ================= 3. 仪表盘与推演控制 ================= */
+        .dash {
+            position: absolute; top: var(--safe-top); right: 20px; width: 310px;
+            background: var(--surface); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+            border: 0.5px solid var(--bd); border-radius: 24px; padding: 20px;
+            display: none; flex-direction: column; gap: 16px; pointer-events: auto;
+        }
+        .dash-card { background: rgba(120, 120, 128, 0.1); padding: 14px; border-radius: 16px; }
+        .dash-row { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+        .dash-label { font-size: 11px; color: var(--text-muted); font-weight: 700; text-transform: uppercase; }
+        .dash-value { font-size: 15px; font-weight: 600; color: #fff; }
+
+        .timeline {
+            position: absolute; bottom: calc(var(--safe-bottom) + 10px); left: 400px; right: 20px;
+            background: var(--surface); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+            border: 0.5px solid var(--bd); border-radius: 32px; padding: 12px 24px;
+            display: none; align-items: center; gap: 20px; pointer-events: auto;
+            transition: left 0.6s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+        .timeline.full { left: 20px; }
+
+        .btn-fab { width: 48px; height: 48px; border-radius: 24px; border: none; cursor: pointer; display: flex; align-items: center; justify-content: center; transition: 0.2s; }
+        .play-btn { background: #fff; color: #000; }
+        .exit-btn { background: var(--apple-red); color: #fff; width: auto; padding: 0 20px; font-weight: 700; font-size: 13px; }
+
+        input[type=range] { -webkit-appearance: none; height: 4px; background: rgba(255,255,255,0.2); border-radius: 2px; flex: 1; cursor: pointer; }
+        input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; width: 18px; height: 18px; border-radius: 9px; background: #fff; box-shadow: 0 0 10px rgba(0,0,0,0.5); }
+
+        /* ================= 4. 沙盘选点与配置 ================= */
+        .picker-layer { position: absolute; inset: 0; z-index: 500; display: none; pointer-events: none; }
+        .crosshair { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); width: 40px; height: 40px; border: 2px solid var(--apple-blue); border-radius: 50%; }
+        .crosshair::after { content: ''; position: absolute; top: 50%; left: 50%; width: 4px; height: 4px; background: var(--apple-blue); border-radius: 50%; transform: translate(-50%, -50%); }
+
+        .picker-btns { position: absolute; bottom: 40px; left: 0; right: 0; display: flex; justify-content: center; gap: 16px; pointer-events: auto; }
+        .glass-btn { background: var(--surface); backdrop-filter: var(--blur); color: #fff; border: 0.5px solid var(--bd); padding: 14px 28px; border-radius: 16px; font-weight: 700; cursor: pointer; transition: 0.2s; }
+        .glass-btn:active { transform: scale(0.95); }
+
+        .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,0.7); z-index: 1000; display: none; align-items: center; justify-content: center; backdrop-filter: blur(10px); }
+        .modal { background: var(--card); border: 0.5px solid var(--bd); width: 340px; border-radius: 28px; padding: 28px; display: flex; flex-direction: column; gap: 20px; }
+
+        /* 状态提示 */
+        #sync-loader { position: fixed; top: 20px; left: 50%; transform: translateX(-50%); background: var(--apple-blue); color: #fff; padding: 8px 18px; border-radius: 20px; font-size: 12px; font-weight: 700; display: none; z-index: 9999; box-shadow: 0 4px 15px rgba(10,132,255,0.4); }
+
+        /* ================= 5. 移动端适配 ================= */
+        @media (max-width: 768px) {
+            .sidebar {
+                top: auto; left: 10px; right: 10px; bottom: 10px; width: auto; height: 50vh;
+                border-radius: 28px 28px 20px 20px; transform: translateY(110%);
+            }
+            .sidebar.show-mobile { transform: translateY(0); }
+            .timeline { left: 15px !important; right: 15px !important; bottom: 15px; padding: 10px 16px; gap: 12px; }
+            .dash { top: 15px; right: 15px; left: 15px; width: auto; }
+            #mobile-trigger { position: absolute; top: 15px; left: 15px; z-index: 1000; pointer-events: auto; display: flex !important; background: var(--surface); color: #fff; padding: 10px 18px; border-radius: 20px; font-size: 13px; font-weight: 700; border: 0.5px solid var(--bd); }
+        }
+    </style>
+</head>
+<body>
+
+<div id="sync-loader">数据同步中...</div>
+
+<!-- 沙盘交互层 -->
+<div class="picker-layer" id="picker-ui">
+    <div class="crosshair"></div>
+    <div class="picker-btns">
+        <button class="glass-btn" onclick="Sandtable.exit()">取消</button>
+        <button class="glass-btn" style="background: var(--apple-blue); border:none;" onclick="Sandtable.openModal()">在此模拟地震</button>
+    </div>
+</div>
+
+<!-- 沙盘配置窗 -->
+<div class="modal-bg" id="modal-ui">
+    <div class="modal">
+        <h2 style="font-size: 22px; font-weight: 800; letter-spacing: -0.5px;">配置推演参数</h2>
+        <div>
+            <label style="font-size: 11px; color: var(--text-muted); display:block; margin-bottom:8px; font-weight:700;">震级 (Magnitude 1.0 - 10.0)</label>
+            <input type="number" id="sim-mag" value="7.5" step="0.1" class="input-pill">
+        </div>
+        <div>
+            <label style="font-size: 11px; color: var(--text-muted); display:block; margin-bottom:8px; font-weight:700;">震源深度 (km 0 - 700)</label>
+            <input type="number" id="sim-dep" value="15" step="1" class="input-pill">
+        </div>
+        <div style="display:flex; gap:12px; margin-top:8px;">
+            <button class="exit-btn" style="flex:1; background:rgba(255,255,255,0.1);" onclick="Sandtable.closeModal()">取消</button>
+            <button class="exit-btn" style="flex:1; background:var(--apple-blue);" onclick="Sandtable.launch()">立即启动</button>
+        </div>
+    </div>
+</div>
+
+<div id="map"></div>
+
+<div class="ui-root">
+    <div id="mobile-trigger" style="display:none;" onclick="UI.toggleMobileSidebar()">点击显示地震列表</div>
+
+    <!-- 侧边栏 -->
+    <aside class="sidebar" id="sidebar">
+        <div class="header">
+            <h1>YESPS Pro</h1>
+            <p>Seismic Analytics Engine</p>
+        </div>
+
+        <div class="search-area">
+            <div class="seg-ctrl">
+                <div class="seg-item active" id="src-usgs" onclick="Data.switchSource('usgs')">实时监测</div>
+                <div class="seg-item" id="src-local" onclick="Data.switchSource('local')">历史图库</div>
+            </div>
+            <div style="display:flex; gap:8px;">
+                <input type="text" id="search-in" class="input-pill" placeholder="搜索全球地域..." oninput="UI.debouncedRender()">
+                <select id="mag-filter" class="input-pill" style="width:100px;" onchange="UI.renderList()">
+                    <option value="4.0">4.0+</option>
+                    <option value="6.0">6.0+</option>
+                    <option value="7.5">7.5+</option>
+                </select>
+            </div>
+            <button class="glass-btn" style="width:100%; font-size: 14px; padding: 12px;" onclick="Sandtable.enter()">自定义沙盘模拟</button>
+        </div>
+
+        <div class="list-wrap" id="list-container">
+            <!-- 动态生成 -->
+        </div>
+    </aside>
+
+    <!-- 评估仪表盘 -->
+    <div class="dash" id="dash">
+        <div class="dash-card" style="border-left: 4px solid var(--apple-orange);">
+            <div class="dash-row"><span class="dash-label">影响评估</span><span class="dash-value" id="val-risk" style="color:var(--apple-orange)">计算中...</span></div>
+            <div class="dash-row"><span class="dash-label">预估破坏半径</span><span class="dash-value mono" id="val-radius">-- km</span></div>
+        </div>
+        <div class="dash-card">
+            <div class="dash-row"><span class="dash-label">纵波波速 (Vp)</span><span class="dash-value mono" id="val-vp">--</span></div>
+            <div class="dash-row"><span class="dash-label">纵波 (P) 前锋距</span><span class="dash-value mono" id="val-p" style="color:var(--apple-blue)">0 km</span></div>
+            <div class="dash-row"><span class="dash-label">横波 (S) 前锋距</span><span class="dash-value mono" id="val-s" style="color:var(--apple-red)">0 km</span></div>
+        </div>
+        <div class="dash-card" style="background:transparent; padding:0;">
+            <div class="dash-row"><span class="dash-label">震中烈度 (MMI)</span><span class="dash-value mono" id="val-mmi" style="font-size:26px;">--</span></div>
+            <div style="height:6px; background:var(--bd); border-radius:3px; overflow:hidden;">
+                <div id="mmi-bar" style="height:100%; width:0%; background:var(--apple-red); transition:0.3s cubic-bezier(0.16, 1, 0.3, 1);"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 推演播放器 -->
+    <div class="timeline" id="playback">
+        <button class="btn-fab play-btn" onclick="Sim.toggle()">
+            <svg id="play-icon" width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+        <div style="flex:1; display:flex; flex-direction:column; gap:4px;">
+            <input type="range" id="sim-range" min="0" max="100" step="0.1" value="0" oninput="Sim.seek(this.value)">
+            <div class="dash-row mono">
+                <span id="t-curr" style="color:#fff; font-size:12px;">T+ 0.0s</span>
+                <span id="t-max" style="color:var(--text-muted); font-size:11px;">0s</span>
+            </div>
+        </div>
+        <button class="btn-fab exit-btn" onclick="Sim.stop()">退出</button>
+    </div>
+</div>
+
+<script>
+/**
+ * YESPS Pro v3 - 核心引擎
+ */
+const App = (function() {
+    // 物理引擎
+    const Physics = {
+        getWaveParams(dep) {
+            const vp = Math.max(6.0, Math.min(8.5, 5.8 + 0.04 * dep));
+            return { vp, vs: vp / 1.73 };
+        },
+        calcMMI(mag, dist, dep) {
+            const R = Math.sqrt(dist**2 + dep**2);
+            if (R < 1) return 1.5 * mag;
+            return Math.max(1.0, Math.min(12.0, 1.65 * mag - 2.1 * Math.log10(R) + 2.1));
+        }
+    };
+
+    // 数据状态
+    const State = {
+        source: 'usgs',
+        cache: [],
+        markers: [],
+        activeEv: null,
+        isPlaying: false,
+        time: 0,
+        maxT: 0,
+        timer: null
+    };
+
+    // 数据服务
+    const DataService = {
+        async fetch() {
+            document.getElementById('sync-loader').style.display = 'block';
+            try {
+                // 使用官方接口
+                const res = await fetch('https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_week.geojson');
+                const json = await res.json();
+                State.cache = json.features.map(f => ({
+                    id: f.id, mag: f.properties.mag, place: f.properties.place,
+                    lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0],
+                    dep: f.geometry.coordinates[2], time: new Date(f.properties.time).toLocaleString()
+                }));
+                UIService.renderList();
+            } catch (e) {
+                console.warn('API 连接失败，降级至本地模式');
+                this.switchSource('local');
+            }
+            document.getElementById('sync-loader').style.display = 'none';
+        },
+        switchSource(src) {
+            State.source = src;
+            document.getElementById('src-usgs').classList.toggle('active', src === 'usgs');
+            document.getElementById('src-local').classList.toggle('active', src === 'local');
+            if(src === 'local') {
+                State.cache = [
+                    { id:'l1', mag:8.0, place:"中国 四川汶川特大地震", lat:31.0, lon:103.4, dep:14, time:"2008-05-12" },
+                    { id:'l2', mag:9.1, place:"日本 东北311大地震", lat:38.3, lon:142.4, dep:29, time:"2011-03-11" },
+                    { id:'l3', mag:7.8, place:"中国 河北唐山大地震", lat:39.6, lon:118.2, dep:11, time:"1976-07-28" },
+                    { id:'l4', mag:9.5, place:"智利 瓦尔迪维亚巨震", lat:-38.2, lon:-73.3, dep:33, time:"1960-05-22" }
+                ];
+                UIService.renderList();
+            } else {
+                this.fetch();
+            }
+        }
+    };
+
+    // UI 服务
+    const UIService = {
+        debouncedRender: (function() {
+            let t; return () => { clearTimeout(t); t = setTimeout(() => UIService.renderList(), 300); }
+        })(),
+        renderList() {
+            const container = document.getElementById('list-container');
+            const kw = document.getElementById('search-in').value.toLowerCase();
+            const magLimit = parseFloat(document.getElementById('mag-filter').value);
+            const filtered = State.cache.filter(d => d.place.toLowerCase().includes(kw) && d.mag >= magLimit);
+            
+            // 内存片段渲染
+            const frag = document.createDocumentFragment();
+            filtered.forEach(d => {
+                const card = document.createElement('div');
+                card.className = `card ${State.activeEv?.id === d.id ? 'active' : ''}`;
+                card.onclick = () => SimEngine.load(d.id);
+                card.innerHTML = `
+                    <div class="mag-tag mono" style="color:${d.mag >= 7 ? 'var(--apple-red)' : 'var(--apple-orange)'}">${d.mag.toFixed(1)}</div>
+                    <div style="flex:1; min-width:0;">
+                        <h4>${d.place}</h4>
+                        <p class="mono">${d.time} · 深度 ${d.dep}km</p>
+                    </div>`;
+                frag.appendChild(card);
+            });
+            container.innerHTML = '';
+            container.appendChild(frag);
+
+            // 清理并刷新 Marker
+            State.markers.forEach(m => window.map.removeLayer(m));
+            State.markers = filtered.slice(0, 50).map(d => {
+                return L.circleMarker([d.lat, d.lon], {
+                    radius: d.mag * 1.8, color: d.mag >= 7 ? '#FF453A' : '#FF9F0A', weight: 1, fillOpacity: 0.3
+                }).addTo(window.map);
+            });
+        },
+        toggleMobileSidebar() {
+            document.getElementById('sidebar').classList.toggle('show-mobile');
+        }
+    };
+
+    // 推演引擎
+    const SimEngine = {
+        layers: { p: null, s: null },
+        load(id) {
+            const ev = State.cache.find(d => d.id === id);
+            if(!ev) return;
+            this.stop();
+            State.activeEv = ev;
+            window.map.flyTo([ev.lat, ev.lon], 6, { duration: 1.2 });
+            
+            const params = Physics.getWaveParams(ev.dep);
+            State.maxT = (ev.mag * 130) / params.vs;
+            
+            document.getElementById('t-max').innerText = State.maxT.toFixed(0) + 's';
+            document.getElementById('sim-range').max = State.maxT;
+            document.getElementById('dash').style.display = 'flex';
+            document.getElementById('playback').style.display = 'flex';
+            document.getElementById('sidebar').classList.add('hidden');
+            document.getElementById('val-vp').innerText = params.vp.toFixed(2) + ' km/s';
+            
+            this.layers.p = L.circle([ev.lat, ev.lon], { radius: 0, color: '#0A84FF', weight: 1.5, fill: false }).addTo(window.map);
+            this.layers.s = L.circle([ev.lat, ev.lon], { radius: 0, color: '#FF453A', weight: 2.5, fillColor: '#FF453A', fillOpacity: 0.15 }).addTo(window.map);
+            
+            UIService.renderList();
+            this.toggle(true);
+        },
+        toggle(state) {
+            State.isPlaying = state !== undefined ? state : !State.isPlaying;
+            document.getElementById('play-icon').innerHTML = State.isPlaying ? `<path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/>` : `<path d="M8 5v14l11-7z"/>`;
+            if(State.isPlaying) { State.lastTick = performance.now(); this.loop(); }
+            else { cancelAnimationFrame(State.timer); }
+        },
+        seek(val) {
+            State.time = parseFloat(val);
+            this.update();
+        },
+        loop() {
+            const now = performance.now();
+            const dt = (now - State.lastTick) / 1000 * 40; // 40x 倍速
+            State.lastTick = now;
+            State.time += dt;
+
+            if(State.time >= State.maxT) { State.time = State.maxT; this.toggle(false); }
+            this.update();
+            if(State.isPlaying) State.timer = requestAnimationFrame(() => this.loop());
+        },
+        update() {
+            const ev = State.activeEv;
+            const ps = Physics.getWaveParams(ev.dep);
+            const dp = State.time * ps.vp; const ds = State.time * ps.vs;
+            const pr = dp > ev.dep ? Math.sqrt(dp**2 - ev.dep**2) : 0;
+            const sr = ds > ev.dep ? Math.sqrt(ds**2 - ev.dep**2) : 0;
+            
+            this.layers.p.setRadius(pr * 1000);
+            this.layers.s.setRadius(sr * 1000);
+
+            document.getElementById('t-curr').innerText = `T+ ${State.time.toFixed(1)}s`;
+            document.getElementById('sim-range').value = State.time;
+            document.getElementById('val-p').innerText = pr.toFixed(0) + ' km';
+            document.getElementById('val-s').innerText = sr.toFixed(0) + ' km';
+            
+            const mmi = sr > 0 ? Physics.calcMMI(ev.mag, sr, ev.dep) : 0;
+            document.getElementById('val-mmi').innerText = mmi > 0 ? ["I","II","III","IV","V","VI","VII","VIII","IX","X","XI","XII"][Math.floor(mmi-1)] : "--";
+            document.getElementById('mmi-bar').style.width = (mmi / 12 * 100) + '%';
+            document.getElementById('val-risk').innerText = ev.mag >= 7.5 ? "灾难级预警" : (ev.mag >= 6 ? "严重破坏级" : "普遍有感级");
+            document.getElementById('val-radius').innerText = (ev.mag * 18).toFixed(0) + ' km';
+        },
+        stop() {
+            State.isPlaying = false;
+            cancelAnimationFrame(State.timer);
+            if(this.layers.p) window.map.removeLayer(this.layers.p);
+            if(this.layers.s) window.map.removeLayer(this.layers.s);
+            this.layers = { p: null, s: null };
+            State.activeEv = null; State.time = 0;
+            document.getElementById('dash').style.display = 'none';
+            document.getElementById('playback').style.display = 'none';
+            document.getElementById('sidebar').classList.remove('hidden');
+            UIService.renderList();
+        }
+    };
+
+    // 沙盘服务
+    const Sandtable = {
+        enter() {
+            document.getElementById('sidebar').classList.add('hidden');
+            document.getElementById('picker-ui').style.display = 'block';
+        },
+        exit() {
+            document.getElementById('picker-ui').style.display = 'none';
+            document.getElementById('sidebar').classList.remove('hidden');
+        },
+        openModal() {
+            document.getElementById('modal-ui').style.display = 'flex';
+        },
+        closeModal() {
+            document.getElementById('modal-ui').style.display = 'none';
+        },
+        launch() {
+            const mag = Math.max(1, Math.min(10, parseFloat(document.getElementById('sim-mag').value) || 7.5));
+            const dep = Math.max(0, Math.min(700, parseFloat(document.getElementById('sim-dep').value) || 15));
+            const center = window.map.getCenter();
+            const id = 'sim_' + Date.now();
+            
+            State.cache.unshift({
+                id, mag, dep, place: "自定义沙盘位置", lat: center.lat, lon: center.lng, time: "实时演练"
+            });
+            
+            this.closeModal();
+            this.exit();
+            SimEngine.load(id);
+        }
+    };
+
+    return {
+        init() {
+            window.map = L.map('map', { center: [35, 105], zoom: 4, zoomControl: false, attributionControl: false });
+            L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(window.map);
+            L.control.zoom({ position: 'topleft' }).addTo(window.map);
+            DataService.fetch();
+        },
+        Data: DataService,
+        UI: UIService,
+        Sim: SimEngine,
+        ST: Sandtable
+    };
+})();
+
+// 启动入口
+window.onload = () => App.init();
+
+// 暴露 API
+window.Data = App.Data;
+window.UI = App.UI;
+window.Sim = App.Sim;
+window.Sandtable = App.ST;
+</script>
+</body>
+</html>
